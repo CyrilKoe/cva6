@@ -114,6 +114,8 @@ package config_pkg;
     bit                          RVS;
     // User mode
     bit                          RVU;
+    // User mode trap
+    bit                          RVUTrap;
     // Software interrupts are enabled
     bit                          SoftwareInterruptEn;
     // Debug support
@@ -344,6 +346,7 @@ package config_pkg;
     bit          MmuPresent;
     bit          RVS;                  //Supervisor mode
     bit          RVU;                  //User mode
+    bit          RVUTrap;              //User mode trap
     bit          SoftwareInterruptEn;
 
     logic [63:0] HaltAddress;
@@ -469,6 +472,7 @@ package config_pkg;
     assert (!(Cfg.RVS && !Cfg.SoftwareInterruptEn));
     assert (!(Cfg.RVH && !Cfg.SoftwareInterruptEn));
     assert (!(Cfg.RVZCMT && ~Cfg.MmuPresent));
+    assert (!(Cfg.RVUTrap && !Cfg.RVU));
     // pragma translate_on
   endfunction
 

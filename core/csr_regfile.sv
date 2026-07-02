@@ -252,6 +252,8 @@ module csr_regfile
   logic mret;  // return from M-mode exception
   logic sret;  // return from S-mode exception
   logic dret;  // return from debug mode
+  logic uret;  // return from U-mode exception
+  logic u_trap;  // custom U-mode exception trap this cycle
   // CSR write causes us to mark the FPU state as dirty
   logic dirty_fp_state_csr;
   riscv::mstatus_rv_t mstatus_q, mstatus_d;
@@ -301,6 +303,11 @@ module csr_regfile
   logic [CVA6Cfg.XLEN-1:0] stvt_q, stvt_d;
   logic [CVA6Cfg.XLEN-1:0] sscratch_q, sscratch_d;
   logic [CVA6Cfg.XLEN-1:0] sepc_q, sepc_d;
+  logic [CVA6Cfg.XLEN-1:0] uepc_q, uepc_d;
+  logic [CVA6Cfg.XLEN-1:0] ucause_q, ucause_d;
+  logic [CVA6Cfg.XLEN-1:0] utval_q, utval_d;
+  logic [CVA6Cfg.XLEN-1:0] utvec_q, utvec_d;
+  logic [CVA6Cfg.XLEN-1:0] uscratch_q, uscratch_d;
   logic [CVA6Cfg.XLEN-1:0] scause_q, scause_d;
   logic [CVA6Cfg.XLEN-1:0] stval_q, stval_d;
 
@@ -458,6 +465,22 @@ module csr_regfile
             read_access_exception = 1'b1;
           end
         end
+        riscv::CSR_UTVEC:
+        if (CVA6Cfg.RVUTrap) csr_rdata = utvec_q;
+        else read_access_exception = 1'b1;
+        riscv::CSR_USCRATCH:
+        if (CVA6Cfg.RVUTrap) csr_rdata = uscratch_q;
+        else read_access_exception = 1'b1;
+        riscv::CSR_UEPC:
+        if (CVA6Cfg.RVUTrap) csr_rdata = uepc_q;
+        else read_access_exception = 1'b1;
+        riscv::CSR_UCAUSE:
+        if (CVA6Cfg.RVUTrap) csr_rdata = ucause_q;
+        else read_access_exception = 1'b1;
+        riscv::CSR_UTVAL:
+        if (CVA6Cfg.RVUTrap && CVA6Cfg.TvalEn) csr_rdata = utval_q;
+        else if (CVA6Cfg.RVUTrap) csr_rdata = '0;
+        else read_access_exception = 1'b1;
         // non-standard extension
         riscv::CSR_FTRAN: begin
           if (CVA6Cfg.FpPresent && !(mstatus_q.fs == riscv::Off || (CVA6Cfg.RVH && v_q && vsstatus_q.fs == riscv::Off))) begin
@@ -1128,6 +1151,7 @@ module csr_regfile
     end
 
     eret_o                          = 1'b0;
+    u_trap                          = 1'b0;
     flush_o                         = 1'b0;
     update_access_exception         = 1'b0;
     virtual_update_access_exception = 1'b0;
@@ -1219,6 +1243,14 @@ module csr_regfile
     if (CVA6Cfg.RVXHCLIC) begin
       vstvt_d       = vstvt_q;
       vsintthresh_d = vsintthresh_q;
+    end
+
+    if (CVA6Cfg.RVUTrap) begin
+      uepc_d     = uepc_q;
+      ucause_d   = ucause_q;
+      utval_d    = utval_q;
+      utvec_d    = utvec_q;
+      uscratch_d = uscratch_q;
     end
 
     if (CVA6Cfg.RVS) begin
@@ -1332,6 +1364,22 @@ module csr_regfile
             update_access_exception = 1'b1;
           end
         end
+        riscv::CSR_UTVEC:
+        if (CVA6Cfg.RVUTrap)
+          utvec_d = {csr_wdata[CVA6Cfg.XLEN-1:2], 1'b0, csr_wdata[0]};
+        else update_access_exception = 1'b1;
+        riscv::CSR_USCRATCH:
+        if (CVA6Cfg.RVUTrap) uscratch_d = csr_wdata;
+        else update_access_exception = 1'b1;
+        riscv::CSR_UEPC:
+        if (CVA6Cfg.RVUTrap) uepc_d = {csr_wdata[CVA6Cfg.XLEN-1:1], 1'b0};
+        else update_access_exception = 1'b1;
+        riscv::CSR_UCAUSE:
+        if (CVA6Cfg.RVUTrap) ucause_d = csr_wdata;
+        else update_access_exception = 1'b1;
+        riscv::CSR_UTVAL:
+        if (CVA6Cfg.RVUTrap && CVA6Cfg.TvalEn) utval_d = csr_wdata;
+        else if (!CVA6Cfg.RVUTrap) update_access_exception = 1'b1;
         // Trigger module CSRs
         riscv::CSR_TSELECT: begin
           if (CVA6Cfg.SDTRIG) begin
@@ -1743,8 +1791,8 @@ module csr_regfile
           end
           mstatus_d.wpri3 = 9'b0;
           mstatus_d.wpri1 = 1'b0;
-          mstatus_d.wpri2 = 1'b0;
-          mstatus_d.wpri0 = 1'b0;
+          mstatus_d.upie = 1'b0;
+          mstatus_d.uie  = 1'b0;
           // Mirror MBE
           mstatus_d.sbe   = mstatus_d.mbe;
           mstatus_d.ube   = mstatus_d.mbe;
@@ -2227,11 +2275,28 @@ module csr_regfile
     // we got an exception update cause, pc and stval register
     trap_to_priv_lvl = riscv::PRIV_LVL_M;
     trap_to_v = 1'b0;
+    u_trap = CVA6Cfg.RVUTrap && ex_i.valid && (ex_i.cause == riscv::CUSTOM_USER_TRAP);
     // Exception is taken and we are not in debug mode
     // exceptions in debug mode don't update any fields
     if ((CVA6Cfg.DebugEn && !debug_mode_q && ex_i.cause != riscv::DEBUG_REQUEST && ex_i.valid) || (!CVA6Cfg.DebugEn && ex_i.valid) || (!CVA6Cfg.DebugEn && CVA6Cfg.SDTRIG && break_from_trigger)) begin
       // do not flush, flush is reserved for CSR writes with side effects
       flush_o = 1'b0;
+      if (u_trap) begin
+        mstatus_d.uie  = 1'b0;
+        mstatus_d.upie = mstatus_q.uie;
+        uepc_d         = {{CVA6Cfg.XLEN - CVA6Cfg.VLEN{pc_i[CVA6Cfg.VLEN-1]}}, pc_i};
+        ucause_d       = ex_i.cause;
+        if (CVA6Cfg.TvalEn) begin
+          utval_d = (ariane_pkg::ZERO_TVAL && (ex_i.cause inside {
+            riscv::ILLEGAL_INSTR,
+            riscv::BREAKPOINT
+          })) ? '0 : ex_i.tval;
+        end else begin
+          utval_d = '0;
+        end
+        priv_lvl_d     = riscv::PRIV_LVL_U;
+        trap_to_priv_lvl = riscv::PRIV_LVL_U;
+      end else begin
       // figure out where to trap to
       // a m-mode trap might be delegated if we are taking it in S mode
       // first figure out if this was an exception or an interrupt e.g.: look at bit (XLEN-1)
@@ -2383,6 +2448,7 @@ module csr_regfile
       if (CVA6Cfg.RVH) begin
         v_d = trap_to_v;
       end
+      end // !u_trap
     end
 
     // ------------------------------
@@ -2612,6 +2678,12 @@ module csr_regfile
       end
     end
 
+    if (CVA6Cfg.RVUTrap && uret) begin
+      eret_o        = 1'b1;
+      mstatus_d.uie = mstatus_q.upie;
+      mstatus_d.upie = 1'b1;
+    end
+
     // return from debug mode
     if (CVA6Cfg.DebugEn) begin
       if (dret) begin
@@ -2643,6 +2715,7 @@ module csr_regfile
     mret      = 1'b0;
     sret      = 1'b0;
     dret      = 1'b0;
+    uret      = 1'b0;
 
     unique case (csr_op_i)
       CSR_WRITE: csr_wdata = csr_wdata_i;
@@ -2666,6 +2739,10 @@ module csr_regfile
           csr_we   = 1'b0;
           csr_read = 1'b0;
           dret     = 1'b1;  // signal a return from debug mode
+        end else if (CVA6Cfg.RVUTrap && csr_op_i == URET) begin
+          csr_we   = 1'b0;
+          csr_read = 1'b0;
+          uret     = 1'b1;
         end else begin
           csr_we   = 1'b0;
           csr_read = 1'b0;
@@ -2856,6 +2933,9 @@ module csr_regfile
   // output assignments dependent on privilege mode
   always_comb begin : priv_output
     trap_vector_base_o = (CVA6Cfg.RVSCLIC && clic_mode_o && clic_irq_shv_i && ex_i.cause[CVA6Cfg.XLEN-1]) ? {mtvt_q[CVA6Cfg.VLEN-1:8], 8'b0} : {mtvec_q[CVA6Cfg.VLEN-1:2], 2'b0};
+    if (CVA6Cfg.RVUTrap && u_trap) begin
+      trap_vector_base_o = {utvec_q[CVA6Cfg.VLEN-1:2], 2'b0};
+    end
     // output user mode stvec
     if (CVA6Cfg.RVS && trap_to_priv_lvl == riscv::PRIV_LVL_S) begin
       if (CVA6Cfg.RVSCLIC && clic_mode_o && clic_irq_shv_i && ex_i.cause[CVA6Cfg.XLEN-1]) begin
@@ -2908,6 +2988,9 @@ module csr_regfile
       if (dret) begin
         epc_o = dpc_q[CVA6Cfg.VLEN-1:0];
       end
+    end
+    if (CVA6Cfg.RVUTrap && uret) begin
+      epc_o = uepc_q[CVA6Cfg.VLEN-1:0];
     end
   end
 
@@ -3067,6 +3150,13 @@ module csr_regfile
         mcbie_q  <= riscv::CBIE_INVAL;
         mcbcfe_q <= 1'b1;
       end
+      if (CVA6Cfg.RVUTrap) begin
+        uepc_q     <= {CVA6Cfg.XLEN{1'b0}};
+        ucause_q   <= {CVA6Cfg.XLEN{1'b0}};
+        utval_q    <= {CVA6Cfg.XLEN{1'b0}};
+        utvec_q    <= {CVA6Cfg.XLEN{1'b0}};
+        uscratch_q <= {CVA6Cfg.XLEN{1'b0}};
+      end
       // supervisor mode registers
       if (CVA6Cfg.RVS) begin
         medeleg_q    <= {CVA6Cfg.XLEN{1'b0}};
@@ -3180,6 +3270,13 @@ module csr_regfile
       if (CVA6Cfg.RVZiCbom) begin
         mcbie_q  <= mcbie_d;
         mcbcfe_q <= mcbcfe_d;
+      end
+      if (CVA6Cfg.RVUTrap) begin
+        uepc_q     <= uepc_d;
+        ucause_q   <= ucause_d;
+        utval_q    <= utval_d;
+        utvec_q    <= utvec_d;
+        uscratch_q <= uscratch_d;
       end
       // supervisor mode registers
       if (CVA6Cfg.RVS) begin
@@ -3304,6 +3401,7 @@ module csr_regfile
           .debug_mode_i         (debug_mode_q),
           .mret_i               (mret),
           .sret_i               (sret),
+          .uret_i               (uret),
           .scontext_i           (scontext_q),
           .tselect_i            (tselect_to_tm),
           .tdata1_i             (tdata1_to_tm),
@@ -3367,6 +3465,11 @@ module csr_regfile
   assign rvfi_csr_o.sepc_q = CVA6Cfg.RVS ? sepc_q : '0;
   assign rvfi_csr_o.scause_q = CVA6Cfg.RVS ? scause_q : '0;
   assign rvfi_csr_o.stval_q = CVA6Cfg.RVS ? stval_q : '0;
+  assign rvfi_csr_o.uepc_q = CVA6Cfg.RVUTrap ? uepc_q : '0;
+  assign rvfi_csr_o.ucause_q = CVA6Cfg.RVUTrap ? ucause_q : '0;
+  assign rvfi_csr_o.utval_q = CVA6Cfg.RVUTrap ? utval_q : '0;
+  assign rvfi_csr_o.utvec_q = CVA6Cfg.RVUTrap ? utvec_q : '0;
+  assign rvfi_csr_o.uscratch_q = CVA6Cfg.RVUTrap ? uscratch_q : '0;
   assign rvfi_csr_o.satp_q = CVA6Cfg.RVS ? satp_q : '0;
   assign rvfi_csr_o.mstatus_extended = mstatus_extended;
   assign rvfi_csr_o.medeleg_q = CVA6Cfg.RVS ? medeleg_q : '0;

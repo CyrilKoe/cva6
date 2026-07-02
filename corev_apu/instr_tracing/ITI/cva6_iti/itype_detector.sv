@@ -47,7 +47,7 @@ module itype_detector #(
 
 
 
-  assign eret = op_i inside {ariane_pkg::MRET, ariane_pkg::SRET, ariane_pkg::DRET};
+  assign eret = op_i inside {ariane_pkg::MRET, ariane_pkg::SRET, ariane_pkg::DRET, ariane_pkg::URET};
 
   assign nontaken_branch = (  op_i == ariane_pkg::EQ ||
                                 op_i == ariane_pkg::NE ||

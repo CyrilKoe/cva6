@@ -147,6 +147,11 @@
   logic [Cfg.XLEN-1:0] sepc_q; \
   logic [Cfg.XLEN-1:0] scause_q; \
   logic [Cfg.XLEN-1:0] stval_q; \
+  logic [Cfg.XLEN-1:0] uepc_q; \
+  logic [Cfg.XLEN-1:0] ucause_q; \
+  logic [Cfg.XLEN-1:0] utval_q; \
+  logic [Cfg.XLEN-1:0] utvec_q; \
+  logic [Cfg.XLEN-1:0] uscratch_q; \
   logic [Cfg.XLEN-1:0] satp_q; \
   logic [Cfg.XLEN-1:0] mstatus_extended; \
   logic [Cfg.XLEN-1:0] medeleg_q; \

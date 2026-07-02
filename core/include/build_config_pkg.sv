@@ -103,6 +103,7 @@ package build_config_pkg;
     cfg.MmuPresent = CVA6Cfg.MmuPresent;
     cfg.RVS = CVA6Cfg.RVS;
     cfg.RVU = CVA6Cfg.RVU;
+    cfg.RVUTrap = CVA6Cfg.RVUTrap;
     cfg.SoftwareInterruptEn = CVA6Cfg.SoftwareInterruptEn;
 
     cfg.HaltAddress = CVA6Cfg.HaltAddress;

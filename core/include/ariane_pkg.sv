@@ -306,6 +306,7 @@ package ariane_pkg;
     MRET,
     SRET,
     DRET,
+    URET,
     ECALL,
     WFI,
     FENCE,

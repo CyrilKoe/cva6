@@ -16,6 +16,7 @@ module trigger_module
     input logic debug_mode_i,
     input logic mret_i,
     input logic sret_i,
+    input logic uret_i,
     input logic [CVA6Cfg.VLEN-1:0] vaddr_from_lsu_i,
     input logic [CVA6Cfg.NrIssuePorts-1:0][31:0] orig_instr_i,
     input logic [CVA6Cfg.XLEN-1:0] store_result_i,
@@ -198,7 +199,7 @@ module trigger_module
             in_trap_handler_d = 1'b1;
             icount32_tdata1_d[i].count = icount32_tdata1_q[i].count - 1;
           end
-          if (commit_ack_i && (mret_i || sret_i)) in_trap_handler_d = 1'b0;
+          if (commit_ack_i && (mret_i || sret_i || uret_i)) in_trap_handler_d = 1'b0;
           if (commit_ack_i && !in_trap_handler_d && (icount32_tdata1_q[i].count != 0)) begin
             icount32_tdata1_d[i].count = icount32_tdata1_q[i].count - 1;
           end
@@ -344,7 +345,7 @@ module trigger_module
             priv_match[i] &= scontext_match[i];
           end
           if (tdata2_d[i][ex_i.cause]) e_matched_d = 1'b1;
-          if (mret_i || sret_i) mret_reg_d = 1'b1;
+          if (mret_i || sret_i || uret_i) mret_reg_d = 1'b1;
           if (e_matched_q && priv_match[i] && mret_reg_q && commit_ack_i) begin
             e_matched_d = 1'b0;
             etrigger32_tdata1_d[i].hit = 1'b1;
@@ -396,7 +397,7 @@ module trigger_module
           if (ex_i.cause[CVA6Cfg.XLEN-1]) begin
             if (tdata2_d[i][ex_i.cause[4:0]]) e_matched_d = 1'b1;
           end
-          if (mret_i || sret_i) mret_reg_d = 1'b1;
+          if (mret_i || sret_i || uret_i) mret_reg_d = 1'b1;
           if (e_matched_q && priv_match[i] && mret_reg_q && commit_ack_i) begin
             e_matched_d = 1'b0;
             itrigger32_tdata1_d[i].hit = 1'b1;

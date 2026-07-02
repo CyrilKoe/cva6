@@ -88,6 +88,7 @@ localparam config_pkg::cva6_user_cfg_t cva6_cfg = '{
    MmuPresent: bit'(1),
    RVS: bit'(1),
    RVU: bit'(1),
+   RVUTrap: bit'(1),
    SoftwareInterruptEn: bit'(1),
    HaltAddress: 64'h800,
    ExceptionAddress: 64'h808,

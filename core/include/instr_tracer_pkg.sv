@@ -97,6 +97,7 @@ package instr_tracer_pkg;
   parameter INSTR_MRET = {12'b001100000010, 13'b0, riscv::OpcodeSystem};
   parameter INSTR_SRET = {12'b000100000010, 13'b0, riscv::OpcodeSystem};
   parameter INSTR_DRET = {12'b011110110010, 13'b0, riscv::OpcodeSystem};
+  parameter INSTR_URET = {12'b000000000010, 13'b0, riscv::OpcodeSystem};
   parameter INSTR_WFI = {12'b000100000101, 13'b0, riscv::OpcodeSystem};
   parameter INSTR_SFENCE = {12'b0001001?????, 13'b?, riscv::OpcodeSystem};
 

@@ -121,11 +121,11 @@ package riscv;
     logic mpie;  // machine interrupts enable bit active prior to trap
     logic         ube;    // UBE controls whether explicit load and store memory accesses made from U-mode are little-endian (UBE=0) or big-endian (UBE=1)
     logic spie;  // supervisor interrupts enable bit active prior to trap
-    logic wpri2;  // writes preserved reads ignored
+    logic upie;  // user interrupts enable bit active prior to trap
     logic mie;  // machine interrupts enable
     logic wpri1;  // writes preserved reads ignored
     logic sie;  // supervisor interrupts enable
-    logic wpri0;  // writes preserved reads ignored
+    logic uie;  // user interrupts enable
   } mstatus_rv_t;
 
   typedef struct packed {
@@ -363,6 +363,8 @@ package riscv;
   localparam logic [XLEN-1:0] VIRTUAL_INSTRUCTION = 22;  // virtual instruction
   localparam logic [XLEN-1:0] STORE_GUEST_PAGE_FAULT = 23;  // Store guest-page fault
   localparam logic [XLEN-1:0] DEBUG_REQUEST = 24;  // Debug request
+  // Reserved for custom U-mode exception handler (trap via RVUTrap, return via uret)
+  localparam logic [XLEN-1:0] CUSTOM_USER_TRAP = 16;
 
   localparam int unsigned IRQ_S_SOFT = 1;
   localparam int unsigned IRQ_VS_SOFT = 2;
@@ -404,6 +406,11 @@ package riscv;
     CSR_FCSR             = 12'h003,
     //jvt
     CSR_JVT              = 12'h017,
+    CSR_UTVEC            = 12'h005,
+    CSR_USCRATCH         = 12'h040,
+    CSR_UEPC             = 12'h041,
+    CSR_UCAUSE           = 12'h042,
+    CSR_UTVAL            = 12'h043,
     CSR_FTRAN            = 12'h800,
     // Vector CSRs
     CSR_VSTART           = 12'h008,

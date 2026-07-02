@@ -139,6 +139,7 @@ module ariane_verilog_wrap
     MmuPresent:             1'b1,
     RVS:                    SupervisorModeEn,
     RVU:                    RVUEn,
+    RVUTrap:                RVUEn,
     SoftwareInterruptEn:    1'b1,  // Software interrupts enabled
     DebugEn:                DebugEn,
     DmBaseAddress:          DmBaseAddress,

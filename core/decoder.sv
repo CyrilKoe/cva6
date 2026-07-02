@@ -279,6 +279,20 @@ module decoder
                     illegal_instr = 1'b1;
                   end
                 end
+                // URET
+                12'b0000_0000_0010: begin
+                  if (CVA6Cfg.RVUTrap) begin
+                    instruction_o.op = ariane_pkg::URET;
+                    if (priv_lvl_i != riscv::PRIV_LVL_U) begin
+                      if (CVA6Cfg.RVH && v_i) virtual_illegal_instr = 1'b1;
+                      else illegal_instr = 1'b1;
+                      instruction_o.op = ariane_pkg::ADD;
+                    end
+                  end else begin
+                    illegal_instr = 1'b1;
+                    instruction_o.op = ariane_pkg::ADD;
+                  end
+                end
                 // WFI
                 12'b1_0000_0101: begin
                   instruction_o.op = ariane_pkg::WFI;

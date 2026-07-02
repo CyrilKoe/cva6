@@ -600,6 +600,12 @@ module cva6_rvfi
     `CONNECT_RVFI_SAME(CVA6Cfg.RVS, scause)
 
     `CONNECT_RVFI_SAME(CVA6Cfg.RVS, stval)
+
+    `CONNECT_RVFI_SAME(CVA6Cfg.RVUTrap, uepc)
+    `CONNECT_RVFI_SAME(CVA6Cfg.RVUTrap, ucause)
+    `CONNECT_RVFI_SAME(CVA6Cfg.RVUTrap, utval)
+    `CONNECT_RVFI_SAME(CVA6Cfg.RVUTrap, utvec)
+    `CONNECT_RVFI_SAME(CVA6Cfg.RVUTrap, uscratch)
     `CONNECT_RVFI_SAME(CVA6Cfg.RVS, satp)
 
     `CONNECT_RVFI_FULL(1'b1, mstatus, csr.mstatus_extended)
