@@ -215,6 +215,7 @@ def main():
         file.append("../core/serdiv.sv")
         file.append("../core/load_store_unit.sv")
         file.append("../core/load_unit.sv")
+        file.append("../core/tmu.sv")
         file.append("../core/store_unit.sv")
         file.append("../core/lsu_bypass.sv")
         file.append("../core/cvxif_fu.sv")

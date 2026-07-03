@@ -39,6 +39,8 @@ module load_unit
     input lsu_ctrl_t lsu_ctrl_i,
     // Pop the load request from the LSU bypass FIFO - LSU_BYPASS
     output logic pop_ld_o,
+    // Kill in-flight TMU check when popping due to an exception - TMU
+    output logic tmu_kill_o,
     // Load unit result is valid - ISSUE_STAGE
     output logic valid_o,
     // Load transaction ID - ISSUE_STAGE
@@ -65,6 +67,8 @@ module load_unit
     input exception_t ex_i,
     // Data TLB hit - MMU
     input logic dtlb_hit_i,
+    // TMU address check hit - LSU
+    input logic tmu_hit_i,
     // Physical page number from the DTLB - MMU
     input logic [CVA6Cfg.PPNW-1:0] dtlb_ppn_i,
     // Page offset for address checking - STORE_UNIT
@@ -85,6 +89,7 @@ module load_unit
   enum logic [3:0] {
     IDLE,
     WAIT_GNT,
+    WAIT_TMU,
     SEND_TAG,
     WAIT_PAGE_OFFSET,
     ABORT_TRANSACTION,
@@ -250,6 +255,7 @@ module load_unit
     req_port_o.data_be   = lsu_ctrl_i.be;
     req_port_o.data_size = extract_transfer_size(lsu_ctrl_i.operation);
     pop_ld_o             = 1'b0;
+    tmu_kill_o           = 1'b0;
 
     // In IDLE and SEND_TAG states, this unit can accept a new load request
     // when the load buffer is not full or if there is a response and the
@@ -276,9 +282,13 @@ module load_unit
                   state_d = ABORT_TRANSACTION;
                 end else begin
                   if (!stall_ni) begin
-                    // we got a grant and a hit on the DTLB so we can send the tag in the next cycle
-                    state_d  = SEND_TAG;
-                    pop_ld_o = 1'b1;
+                    // DTLB hit and grant: skip WAIT_TMU if the TMU already hit this address
+                    if (tmu_hit_i) begin
+                      state_d  = SEND_TAG;
+                      pop_ld_o = 1'b1;
+                    end else begin
+                      state_d = WAIT_TMU;
+                    end
                     // translation valid but this is to NC and the WB is not yet empty.
                   end else if (CVA6Cfg.NonIdemPotenceEn) begin
                     state_d = ABORT_TRANSACTION_NI;
@@ -330,9 +340,13 @@ module load_unit
             state_d = ABORT_TRANSACTION;
           end else begin
             if (!stall_ni) begin
-              // we got a grant and a hit on the DTLB so we can send the tag in the next cycle
-              state_d  = SEND_TAG;
-              pop_ld_o = 1'b1;
+              // DTLB hit and grant: skip WAIT_TMU if the TMU already hit this address
+              if (tmu_hit_i) begin
+                state_d  = SEND_TAG;
+                pop_ld_o = 1'b1;
+              end else begin
+                state_d = WAIT_TMU;
+              end
               // translation valid but this is to NC and the WB is not yet empty.
             end else if (CVA6Cfg.NonIdemPotenceEn) begin
               state_d = ABORT_TRANSACTION_NI;
@@ -342,6 +356,22 @@ module load_unit
         end
         // otherwise we keep waiting on our grant
       end
+
+      // wait for the TMU before sending the tag on the happy path
+      WAIT_TMU: begin
+        translation_req_o = 1'b1;
+        if (tmu_hit_i) begin
+          state_d  = SEND_TAG;
+          pop_ld_o = 1'b1;
+        end else if (ex_i.valid && !req_port_i.data_rvalid) begin
+          state_d    = IDLE;
+          pop_ld_o   = 1'b1;
+          tmu_kill_o = 1'b1;
+          req_port_o.kill_req  = 1'b1;
+          req_port_o.tag_valid = 1'b1;
+        end
+      end
+
       // we know for sure that the tag we want to send is valid
       SEND_TAG: begin
         req_port_o.tag_valid = 1'b1;
@@ -366,9 +396,13 @@ module load_unit
                   state_d = ABORT_TRANSACTION;
                 end else begin
                   if (!stall_ni) begin
-                    // we got a grant and a hit on the DTLB so we can send the tag in the next cycle
-                    state_d  = SEND_TAG;
-                    pop_ld_o = 1'b1;
+                    // DTLB hit and grant: skip WAIT_TMU if the TMU already hit this address
+                    if (tmu_hit_i) begin
+                      state_d  = SEND_TAG;
+                      pop_ld_o = 1'b1;
+                    end else begin
+                      state_d = WAIT_TMU;
+                    end
                     // translation valid but this is to NC and the WB is not yet empty.
                   end else if (CVA6Cfg.NonIdemPotenceEn) begin
                     state_d = ABORT_TRANSACTION_NI;
@@ -430,7 +464,9 @@ module load_unit
             // the next state will be the idle state
             state_d  = IDLE;
             // pop load - but only if we are not getting an rvalid in here - otherwise we will over-write an incoming transaction
-            pop_ld_o = ~req_port_i.data_rvalid;
+            pop_ld_o   = ~req_port_i.data_rvalid;
+            // Always abort any in-flight TMU walk for this abandoned translation attempt
+            tmu_kill_o = 1'b1;
           end
         end else begin
           state_d = IDLE;
@@ -466,8 +502,8 @@ module load_unit
       // if the response corresponds to the last request, check that we are not killing it
       if ((ldbuf_last_id_q != ldbuf_rindex) || !req_port_o.kill_req) valid_o = 1'b1;
       // the output is also valid if we got an exception. An exception arrives one cycle after
-      // dtlb_hit_i is asserted, i.e. when we are in SEND_TAG. Otherwise, the exception
-      // corresponds to the next request that is already being translated (see below).
+      // dtlb_hit_i / tmu_hit_i is asserted, i.e. when we are in SEND_TAG. Otherwise, the
+      // exception corresponds to the next request that is already being translated (see below).
       if (ex_i.valid && (state_q == SEND_TAG)) begin
         valid_o    = 1'b1;
         ex_o.valid = 1'b1;
@@ -479,6 +515,15 @@ module load_unit
     // so we simply check if we got an rvalid if so we prioritize it by not retiring the exception - we simply go for another
     // round in the load FSM
     if ((CVA6Cfg.MmuPresent || CVA6Cfg.NonIdemPotenceEn) && (state_q == WAIT_TRANSLATION) && !req_port_i.data_rvalid && ex_i.valid && valid_i) begin
+      trans_id_o = lsu_ctrl_i.trans_id;
+      valid_o = 1'b1;
+      ex_o.valid = 1'b1;
+    end
+
+    // an exception occurred while waiting for the TMU (e.g. MMU fault one cycle after
+    // dtlb_hit_i, or a TMU fault reported before tmu_hit_i). Same priority as above:
+    // prefer a concurrent non-excepting rvalid over retiring the exception.
+    if ((state_q == WAIT_TMU) && !tmu_hit_i && !req_port_i.data_rvalid && ex_i.valid && valid_i) begin
       trans_id_o = lsu_ctrl_i.trans_id;
       valid_o = 1'b1;
       ex_o.valid = 1'b1;

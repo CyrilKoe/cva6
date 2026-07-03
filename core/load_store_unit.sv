@@ -182,6 +182,7 @@ module load_store_unit
 
   logic                        pop_st;
   logic                        pop_ld;
+  logic                        tmu_kill;
 
   // ------------------------------
   // Address Generation Unit (AGU)
@@ -242,6 +243,10 @@ module load_store_unit
   exception_t misaligned_exception, cva6_misaligned_exception, acc_misaligned_exception;
   exception_t ld_ex;
   exception_t st_ex;
+  exception_t cva6_mmu_exception_ld;
+  exception_t tmu_exception;
+
+  logic        tmu_hit;
 
   logic       hs_ld_st_inst;
   logic       hlvx_inst;
@@ -401,6 +406,35 @@ module load_store_unit
       .pmpcfg_i            (pmpcfg_i),
       .pmpaddr_i           (pmpaddr_i)
   );
+
+  // ------------------------
+  // TMU (load address check)
+  // ------------------------
+  tmu #(
+      .CVA6Cfg    (CVA6Cfg),
+      .exception_t(exception_t)
+  ) i_tmu (
+      .clk_i                   (clk_i),
+      .rst_ni                  (rst_ni),
+      .flush_i                 (flush_i),
+      .ld_translation_req_i    (ld_translation_req),
+      .ld_vaddr_i              (ld_vaddr),
+      .ld_tinst_i              (ld_tinst),
+      .ld_st_v_i               (ld_st_v_i),
+      .tmu_kill_i              (tmu_kill),
+      .en_ld_st_translation_i  (en_ld_st_translation_i),
+      .en_ld_st_g_translation_i(en_ld_st_g_translation_i),
+      .tmu_hit_o               (tmu_hit),
+      .tmu_exception_o         (tmu_exception)
+  );
+
+  always_comb begin
+    cva6_mmu_exception_ld = cva6_mmu_exception;
+
+    if (tmu_exception.valid && !cva6_mmu_exception.valid) begin
+      cva6_mmu_exception_ld = tmu_exception;
+    end
+  end
 
   // ------------------
   // External MMU port
@@ -572,7 +606,8 @@ module load_store_unit
       .flush_i,
       .valid_i   (ld_valid_i),
       .lsu_ctrl_i(lsu_ctrl),
-      .pop_ld_o  (pop_ld),
+      .pop_ld_o   (pop_ld),
+      .tmu_kill_o (tmu_kill),
 
       .valid_o              (ld_valid),
       .trans_id_o           (ld_trans_id),
@@ -586,8 +621,9 @@ module load_store_unit
       .hs_ld_st_inst_o      (ld_hs_ld_st_inst),
       .hlvx_inst_o          (ld_hlvx_inst),
       .paddr_i              (cva6_mmu_paddr),
-      .ex_i                 (cva6_mmu_exception),
+      .ex_i                 (cva6_mmu_exception_ld),
       .dtlb_hit_i           (cva6_dtlb_hit),
+      .tmu_hit_i            (tmu_hit),
       .dtlb_ppn_i           (cva6_dtlb_ppn),
       // to store unit
       .page_offset_o        (page_offset),

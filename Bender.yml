@@ -163,6 +163,7 @@ sources:
       - core/issue_read_operands.sv
       - core/issue_stage.sv
       - core/load_unit.sv
+      - core/tmu.sv
       - core/load_store_unit.sv
       - core/lsu_bypass.sv
       - core/mult.sv
