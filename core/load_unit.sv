@@ -380,7 +380,7 @@ module load_unit
         if (tmu_hit_i) begin
           state_d  = SEND_TAG;
           pop_ld_o = 1'b1;
-        end else if (ex_i.valid && !req_port_i.data_rvalid) begin
+        end else if (ld_ex.valid && !req_port_i.data_rvalid) begin
           state_d    = IDLE;
           pop_ld_o   = 1'b1;
           tmu_kill_o = 1'b1;
@@ -476,8 +476,10 @@ module load_unit
           // we've got a hit and we can continue with the request process
           if (dtlb_hit_i) state_d = WAIT_GNT;
 
-          // we got an exception
-          if (ld_ex.valid) begin
+          // we got an exception (MMU/PMP fault only; a TMU exception is
+          // handled later in WAIT_TMU, where MMU precedence is resolved and no
+          // speculative line is outstanding to invalidate here)
+          if (ex_i.valid) begin
             // the next state will be the idle state
             state_d  = IDLE;
             // pop load - but only if we are not getting an rvalid in here - otherwise we will over-write an incoming transaction
@@ -531,7 +533,7 @@ module load_unit
     // exceptions can retire out-of-order -> but we need to give priority to non-excepting load and stores
     // so we simply check if we got an rvalid if so we prioritize it by not retiring the exception - we simply go for another
     // round in the load FSM
-    if ((CVA6Cfg.MmuPresent || CVA6Cfg.NonIdemPotenceEn) && (state_q == WAIT_TRANSLATION) && !req_port_i.data_rvalid && ld_ex.valid && valid_i) begin
+    if ((CVA6Cfg.MmuPresent || CVA6Cfg.NonIdemPotenceEn) && (state_q == WAIT_TRANSLATION) && !req_port_i.data_rvalid && ex_i.valid && valid_i) begin
       trans_id_o = lsu_ctrl_i.trans_id;
       valid_o = 1'b1;
       ex_o.valid = 1'b1;
@@ -540,7 +542,7 @@ module load_unit
     // an exception occurred while waiting for the TMU (e.g. MMU fault one cycle after
     // dtlb_hit_i, or a TMU fault reported before tmu_hit_i). Same priority as above:
     // prefer a concurrent non-excepting rvalid over retiring the exception.
-    if ((state_q == WAIT_TMU) && !tmu_hit_i && !req_port_i.data_rvalid && ex_i.valid && valid_i) begin
+    if ((state_q == WAIT_TMU) && !tmu_hit_i && !req_port_i.data_rvalid && ld_ex.valid && valid_i) begin
       trans_id_o = lsu_ctrl_i.trans_id;
       valid_o = 1'b1;
       ex_o.valid = 1'b1;
