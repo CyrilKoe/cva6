@@ -63,12 +63,14 @@ module load_unit
     output logic hlvx_inst_o,
     // Physical address - MMU
     input logic [CVA6Cfg.PLEN-1:0] paddr_i,
-    // Excepted which appears before load - MMU
+    // Exception which appears before load (MMU/PMP fault) - MMU
     input exception_t ex_i,
     // Data TLB hit - MMU
     input logic dtlb_hit_i,
     // TMU address check hit - LSU
     input logic tmu_hit_i,
+    // TMU address check exception - LSU
+    input exception_t tmu_exception_i,
     // Physical page number from the DTLB - MMU
     input logic [CVA6Cfg.PPNW-1:0] dtlb_ppn_i,
     // Page offset for address checking - STORE_UNIT
@@ -220,12 +222,27 @@ module load_unit
   assign req_port_o.data_id = ldbuf_windex;
   // user field not used
   assign req_port_o.data_wuser = '0;
+// Select the exception that applies to this load. An MMU/PMP fault has
+  // precedence over a TMU exception; the TMU exception is only surfaced when
+  // the MMU did not fault. ld_ex_is_tmu tells the FSM to flush+invalidate the
+  // speculatively-fetched line (rather than just aborting the request).
+  exception_t ld_ex;
+  logic       ld_ex_is_tmu;
+  always_comb begin
+    ld_ex        = ex_i;
+    ld_ex_is_tmu = 1'b0;
+    if (!ex_i.valid && tmu_exception_i.valid) begin
+      ld_ex        = tmu_exception_i;
+      ld_ex_is_tmu = 1'b1;
+    end
+  end
+
   // directly forward exception fields (valid bit is set below)
-  assign ex_o.cause = ex_i.cause;
-  assign ex_o.tval = ex_i.tval;
-  assign ex_o.tval2 = CVA6Cfg.RVH ? ex_i.tval2 : '0;
-  assign ex_o.tinst = CVA6Cfg.RVH ? ex_i.tinst : '0;
-  assign ex_o.gva = CVA6Cfg.RVH ? ex_i.gva : 1'b0;
+  assign ex_o.cause = ld_ex.cause;
+  assign ex_o.tval = ld_ex.tval;
+  assign ex_o.tval2 = CVA6Cfg.RVH ? ld_ex.tval2 : '0;
+  assign ex_o.tinst = CVA6Cfg.RVH ? ld_ex.tinst : '0;
+  assign ex_o.gva = CVA6Cfg.RVH ? ld_ex.gva : 1'b0;
 
   // Check that NI operations follow the necessary conditions
   logic paddr_ni;
@@ -422,7 +439,7 @@ module load_unit
         // Exception
         // ----------
         // if we got an exception we need to kill the request immediately
-        if (ex_i.valid) begin
+        if (ld_ex.valid) begin
           req_port_o.kill_req = 1'b1;
         end
       end
@@ -460,7 +477,7 @@ module load_unit
           if (dtlb_hit_i) state_d = WAIT_GNT;
 
           // we got an exception
-          if (ex_i.valid) begin
+          if (ld_ex.valid) begin
             // the next state will be the idle state
             state_d  = IDLE;
             // pop load - but only if we are not getting an rvalid in here - otherwise we will over-write an incoming transaction
@@ -504,7 +521,7 @@ module load_unit
       // the output is also valid if we got an exception. An exception arrives one cycle after
       // dtlb_hit_i / tmu_hit_i is asserted, i.e. when we are in SEND_TAG. Otherwise, the
       // exception corresponds to the next request that is already being translated (see below).
-      if (ex_i.valid && (state_q == SEND_TAG)) begin
+        if (ld_ex.valid && (state_q == SEND_TAG)) begin
         valid_o    = 1'b1;
         ex_o.valid = 1'b1;
       end
@@ -514,7 +531,7 @@ module load_unit
     // exceptions can retire out-of-order -> but we need to give priority to non-excepting load and stores
     // so we simply check if we got an rvalid if so we prioritize it by not retiring the exception - we simply go for another
     // round in the load FSM
-    if ((CVA6Cfg.MmuPresent || CVA6Cfg.NonIdemPotenceEn) && (state_q == WAIT_TRANSLATION) && !req_port_i.data_rvalid && ex_i.valid && valid_i) begin
+    if ((CVA6Cfg.MmuPresent || CVA6Cfg.NonIdemPotenceEn) && (state_q == WAIT_TRANSLATION) && !req_port_i.data_rvalid && ld_ex.valid && valid_i) begin
       trans_id_o = lsu_ctrl_i.trans_id;
       valid_o = 1'b1;
       ex_o.valid = 1'b1;

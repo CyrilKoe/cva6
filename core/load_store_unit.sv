@@ -243,7 +243,6 @@ module load_store_unit
   exception_t misaligned_exception, cva6_misaligned_exception, acc_misaligned_exception;
   exception_t ld_ex;
   exception_t st_ex;
-  exception_t cva6_mmu_exception_ld;
   exception_t tmu_exception;
 
   logic        tmu_hit;
@@ -427,14 +426,6 @@ module load_store_unit
       .tmu_hit_o               (tmu_hit),
       .tmu_exception_o         (tmu_exception)
   );
-
-  always_comb begin
-    cva6_mmu_exception_ld = cva6_mmu_exception;
-
-    if (tmu_exception.valid && !cva6_mmu_exception.valid) begin
-      cva6_mmu_exception_ld = tmu_exception;
-    end
-  end
 
   // ------------------
   // External MMU port
@@ -621,9 +612,10 @@ module load_store_unit
       .hs_ld_st_inst_o      (ld_hs_ld_st_inst),
       .hlvx_inst_o          (ld_hlvx_inst),
       .paddr_i              (cva6_mmu_paddr),
-      .ex_i                 (cva6_mmu_exception_ld),
+      .ex_i                 (cva6_mmu_exception),
       .dtlb_hit_i           (cva6_dtlb_hit),
       .tmu_hit_i            (tmu_hit),
+      .tmu_exception_i      (tmu_exception),
       .dtlb_ppn_i           (cva6_dtlb_ppn),
       // to store unit
       .page_offset_o        (page_offset),
