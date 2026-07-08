@@ -47,6 +47,8 @@ module tmu
     output exception_t               tmu_exception_o
 );
 
+// `define TEST_FAULT
+
   // Number of cycles to wait before TMU completes the check (placeholder behavior).
   localparam int unsigned TMU_CHECK_DELAY_CYCLES = 25;
   localparam int unsigned TMU_DELAY_CNT_W = (TMU_CHECK_DELAY_CYCLES <= 1) ? 1 : $clog2(
@@ -100,8 +102,10 @@ module tmu
 
   assign tmu_tlb_hit = |tmu_tlb_hits;
   // When VM is off for load/store, bypass the TMU the same way the MMU forces a DTLB hit.
+  // Only apply TMU checks to the 0x9XXXXXXX address region.
   logic tmu_en;
-  assign tmu_en = en_ld_st_translation_i || en_ld_st_g_translation_i;
+  assign tmu_en = (en_ld_st_translation_i || en_ld_st_g_translation_i)
+      && (ld_vaddr_i[31:28] == 4'h9);
   assign tmu_hit_o = tmu_en ? tmu_tlb_hit : 1'b1;
 
   always_comb begin
@@ -145,6 +149,11 @@ module tmu
           if (tmu_en && ld_translation_req_i && !tmu_tlb_hit) begin
             tmu_ttw_state_d = WALK;
           end
+`ifdef TEST_FAULT
+          if ( tmu_tlb_hits[3] ) begin
+            tmu_tlb_tags_d[3] = '0;
+          end
+`endif
         end
         WALK: begin
           if (tmu_ttw_delay_cnt_q == TMU_CHECK_DELAY_CYCLES - 1) begin
@@ -155,7 +164,11 @@ module tmu
             tmu_tlb_tags_d[tmu_tlb_replace_index_q] = '{
                 valid: 1'b1, addr_low: ld_vaddr_i, addr_high: ld_vaddr_i + 4*16
             };
-            tmu_tlb_contents_d[tmu_tlb_replace_index_q] = '{tile_valid: 1};
+`ifdef TEST_FAULT
+            tmu_tlb_contents_d[tmu_tlb_replace_index_q] = '{tile_valid: (tmu_tlb_replace_index_q != 3)};
+`else
+            tmu_tlb_contents_d[tmu_tlb_replace_index_q] = '{tile_valid: 1'b1};
+`endif
             // Round robin update index
             tmu_tlb_replace_index_d = tmu_tlb_replace_index_q + 1'b1;
             if (tmu_tlb_replace_index_q == TMU_N_TLB_ENTRIES - 1) begin
