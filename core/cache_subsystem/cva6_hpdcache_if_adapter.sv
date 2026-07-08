@@ -78,6 +78,27 @@ module cva6_hpdcache_if_adapter
     //  LOAD request
     //  {{{
     if (IsLoadPort == 1'b1) begin : load_port_gen
+      //    Besides regular loads, the load port can issue a cache-block
+      //    operation (CBO) on behalf of the load unit. This is used to
+      //    flush+invalidate a line that was fetched speculatively before the
+      //    TMU raised an exception. The CBO reuses the exact same
+      //    virtually-indexed request path as a load (virtual index in stage 0,
+      //    physical tag in stage 1); only the operation and the fact that it
+      //    needs no response differ.
+      logic                          ld_is_cbo;
+      hpdcache_pkg::hpdcache_req_op_t ld_cbo_op;
+
+      assign ld_is_cbo = CVA6Cfg.RVZiCbom && (cva6_req_i.cbo_op != ariane_pkg::CBO_NONE);
+
+      always_comb begin
+        unique case (cva6_req_i.cbo_op)
+          ariane_pkg::CBO_INVAL: ld_cbo_op = hpdcache_pkg::HPDCACHE_REQ_CMO_INVAL_NLINE;
+          ariane_pkg::CBO_CLEAN: ld_cbo_op = hpdcache_pkg::HPDCACHE_REQ_CMO_FLUSH_NLINE;
+          ariane_pkg::CBO_FLUSH: ld_cbo_op = hpdcache_pkg::HPDCACHE_REQ_CMO_FLUSH_INVAL_NLINE;
+          default:               ld_cbo_op = hpdcache_pkg::HPDCACHE_REQ_LOAD;
+        endcase
+      end
+
       assign hpdcache_req_is_uncacheable = !config_pkg::is_inside_cacheable_regions(
           CVA6Cfg,
           {
@@ -91,12 +112,13 @@ module cva6_hpdcache_if_adapter
       assign hpdcache_req_valid_o = cva6_req_i.data_req;
       assign hpdcache_req.addr_offset = cva6_req_i.address_index;
       assign hpdcache_req.wdata = '0;
-      assign hpdcache_req.op = hpdcache_pkg::HPDCACHE_REQ_LOAD;
+      assign hpdcache_req.op = ld_is_cbo ? ld_cbo_op : hpdcache_pkg::HPDCACHE_REQ_LOAD;
       assign hpdcache_req.be = cva6_req_i.data_be;
       assign hpdcache_req.size = cva6_req_i.data_size;
       assign hpdcache_req.sid = hpdcache_req_sid_i;
       assign hpdcache_req.tid = cva6_req_i.data_id;
-      assign hpdcache_req.need_rsp = 1'b1;
+      //    A CBO expects no response (the load unit pops on grant); a load does
+      assign hpdcache_req.need_rsp = ~ld_is_cbo;
       assign hpdcache_req.phys_indexed = 1'b0;
       assign hpdcache_req.addr_tag = '0;  // unused on virtually indexed request
       assign hpdcache_req.pma.uncacheable = 1'b0;

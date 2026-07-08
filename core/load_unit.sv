@@ -103,6 +103,22 @@ module load_unit
   }
       state_d, state_q;
 
+  // --------------------------------------------------------------------------
+  // Speculative-load / TMU support
+  // --------------------------------------------------------------------------
+  // While a load waits for the TMU verdict in WAIT_TMU its cache request has
+  // already been issued and its response may come back early. That response
+  // must not retire before the TMU confirms the access, otherwise a later TMU
+  // exception could not be reported. We therefore hold the early response and
+  // replay it once the TMU confirms, or drop it on a TMU/MMU exception.
+  logic                                tmu_hold_valid_q, tmu_hold_valid_d;
+  logic [       CVA6Cfg.XLEN-1:0]      tmu_hold_result_q, tmu_hold_result_d;
+  logic [CVA6Cfg.TRANS_ID_BITS-1:0]    tmu_hold_trans_id_q, tmu_hold_trans_id_d;
+  // combinational: replay the held response this cycle
+  logic                                tmu_replay;
+  // combinational (driven by the FSM): report a TMU/MMU exception this cycle
+  logic                                wait_tmu_ex_report;
+
   // in order to decouple the response interface from the request interface,
   // we need a a buffer which can hold all inflight memory load requests
   typedef struct packed {
@@ -206,7 +222,8 @@ module load_unit
   // this is a read-only interface so set the write enable to 0
   assign req_port_o.data_we = 1'b0;
   assign req_port_o.data_wdata = '0;
-  assign req_port_o.cbo_op = ariane_pkg::CBO_NONE;
+  // req_port_o.cbo_op is driven by the load-control FSM (used to flush+invalidate
+  // a speculatively-fetched line on a TMU exception)
   // compose the load buffer write data, control is handled in the FSM
   assign ldbuf_wdata = {
     lsu_ctrl_i.trans_id, lsu_ctrl_i.vaddr[CVA6Cfg.XLEN_ALIGN_BYTES-1:0], lsu_ctrl_i.operation
@@ -222,7 +239,7 @@ module load_unit
   assign req_port_o.data_id = ldbuf_windex;
   // user field not used
   assign req_port_o.data_wuser = '0;
-// Select the exception that applies to this load. An MMU/PMP fault has
+  // Select the exception that applies to this load. An MMU/PMP fault has
   // precedence over a TMU exception; the TMU exception is only surfaced when
   // the MMU did not fault. ld_ex_is_tmu tells the FSM to flush+invalidate the
   // speculatively-fetched line (rather than just aborting the request).
@@ -271,13 +288,17 @@ module load_unit
     req_port_o.tag_valid = 1'b0;
     req_port_o.data_be   = lsu_ctrl_i.be;
     req_port_o.data_size = extract_transfer_size(lsu_ctrl_i.operation);
+    req_port_o.cbo_op    = ariane_pkg::CBO_NONE;
     pop_ld_o             = 1'b0;
     tmu_kill_o           = 1'b0;
+    wait_tmu_ex_report   = 1'b0;
 
     // In IDLE and SEND_TAG states, this unit can accept a new load request
     // when the load buffer is not full or if there is a response and the
     // load buffer is in fall-through mode
-    accept_req           = (valid_i && (!ldbuf_full || (LDBUF_FALLTHROUGH && ldbuf_r)));
+    // Do not accept a new load while a held speculative response is still
+    // waiting to be replayed: this bounds the hold buffer to a single entry.
+    accept_req           = (valid_i && (!ldbuf_full || (LDBUF_FALLTHROUGH && ldbuf_r)) && !tmu_hold_valid_q);
 
     case (state_q)
       IDLE: begin
@@ -377,7 +398,36 @@ module load_unit
       // wait for the TMU before sending the tag on the happy path
       WAIT_TMU: begin
         translation_req_o = 1'b1;
-        if (tmu_hit_i) begin
+        // An exception (TMU or MMU) takes priority over a concurrent tmu_hit.
+        if (ld_ex.valid && valid_i) begin
+          if (CVA6Cfg.RVZiCbom && ld_ex_is_tmu) begin
+            // TMU exception: the line we fetched speculatively may hold
+            // not-yet-ready data. Issue a flush+invalidate CBO so a later
+            // re-execution re-fetches it from memory, and only pop once the
+            // CBO has been accepted by the cache. Do this only in a cycle
+            // without a concurrent cache response so we never collide with a
+            // retiring load on the result port.
+            if (!req_port_i.data_rvalid) begin
+              req_port_o.data_req = 1'b1;
+              req_port_o.cbo_op   = ariane_pkg::CBO_FLUSH;
+              if (req_port_i.data_gnt) begin
+                state_d            = IDLE;
+                pop_ld_o           = 1'b1;
+                tmu_kill_o         = 1'b1;
+                wait_tmu_ex_report = 1'b1;
+              end
+            end
+          end else if (!req_port_i.data_rvalid) begin
+            // MMU exception (or CBO unsupported): just kill the in-flight
+            // request as on the regular translation-fault path.
+            state_d              = IDLE;
+            pop_ld_o             = 1'b1;
+            tmu_kill_o           = 1'b1;
+            req_port_o.kill_req  = 1'b1;
+            req_port_o.tag_valid = 1'b1;
+            wait_tmu_ex_report   = 1'b1;
+          end
+        end else if (tmu_hit_i) begin
           state_d  = SEND_TAG;
           pop_ld_o = 1'b1;
         end else if (ld_ex.valid && !req_port_i.data_rvalid) begin
@@ -499,14 +549,24 @@ module load_unit
     end
   end
 
-  // track the load data for later usage
-  assign ldbuf_w = req_port_o.data_req & req_port_i.data_gnt;
+  // track the load data for later usage. A CBO request (used to flush+invalidate
+  // a speculatively-fetched line on a TMU exception) carries no response, so it
+  // must not allocate a load-buffer entry (which would never be released).
+  assign ldbuf_w = req_port_o.data_req & req_port_i.data_gnt
+      & (req_port_o.cbo_op == ariane_pkg::CBO_NONE);
 
   // ---------------
   // Retire Load
   // ---------------
   assign ldbuf_rindex = (CVA6Cfg.NrLoadBufEntries > 1) ? ldbuf_id_t'(req_port_i.data_rid) : 1'b0,
       ldbuf_rdata = ldbuf_q[ldbuf_rindex];
+
+  // Replay a previously-held speculative response once the TMU has confirmed
+  // the load: only in a cycle where the cache response port is free (so we
+  // never fight a live rvalid for the result port) and not while still waiting
+  // for the verdict or flushing.
+  assign tmu_replay = tmu_hold_valid_q && !req_port_i.data_rvalid
+      && (state_q != WAIT_TMU) && !flush_i;
 
   // decoupled rvalid process
   always_comb begin : rvalid_output
@@ -516,17 +576,41 @@ module load_unit
     valid_o    = 1'b0;
     ex_o.valid = 1'b0;
 
+    tmu_hold_valid_d    = tmu_hold_valid_q;
+    tmu_hold_result_d   = tmu_hold_result_q;
+    tmu_hold_trans_id_d = tmu_hold_trans_id_q;
+
     // we got an rvalid and its corresponding request was not flushed
     if (req_port_i.data_rvalid && !ldbuf_flushed_q[ldbuf_rindex]) begin
-      // if the response corresponds to the last request, check that we are not killing it
-      if ((ldbuf_last_id_q != ldbuf_rindex) || !req_port_o.kill_req) valid_o = 1'b1;
-      // the output is also valid if we got an exception. An exception arrives one cycle after
-      // dtlb_hit_i / tmu_hit_i is asserted, i.e. when we are in SEND_TAG. Otherwise, the
-      // exception corresponds to the next request that is already being translated (see below).
+      // A speculative load still waiting for the TMU verdict must not retire.
+      // Hold its result (to replay once the TMU confirms it) or drop it when a
+      // TMU/MMU exception is being taken.
+      if ((state_q == WAIT_TMU) && (ldbuf_rindex == ldbuf_last_id_q) && !(tmu_hit_i && !ld_ex.valid)) begin
+        valid_o = 1'b0;
+        if (!ld_ex.valid) begin
+          tmu_hold_valid_d    = 1'b1;
+          tmu_hold_result_d   = result_o;
+          tmu_hold_trans_id_d = ldbuf_q[ldbuf_rindex].trans_id;
+        end
+      end else begin
+        // if the response corresponds to the last request, check that we are not killing it
+        if ((ldbuf_last_id_q != ldbuf_rindex) || !req_port_o.kill_req) valid_o = 1'b1;
+        // the output is also valid if we got an exception. An exception arrives one cycle after
+        // dtlb_hit_i / tmu_hit_i is asserted, i.e. when we are in SEND_TAG. Otherwise, the
+        // exception corresponds to the next request that is already being translated (see below).
         if (ld_ex.valid && (state_q == SEND_TAG)) begin
-        valid_o    = 1'b1;
-        ex_o.valid = 1'b1;
+          valid_o    = 1'b1;
+          ex_o.valid = 1'b1;
+        end
       end
+    end
+
+    // replay the held speculative response (TMU confirmed the load)
+    if (tmu_replay) begin
+      trans_id_o       = tmu_hold_trans_id_q;
+      valid_o          = 1'b1;
+      ex_o.valid       = 1'b0;
+      tmu_hold_valid_d = 1'b0;
     end
 
     // an exception occurred during translation
@@ -539,13 +623,16 @@ module load_unit
       ex_o.valid = 1'b1;
     end
 
-    // an exception occurred while waiting for the TMU (e.g. MMU fault one cycle after
-    // dtlb_hit_i, or a TMU fault reported before tmu_hit_i). Same priority as above:
-    // prefer a concurrent non-excepting rvalid over retiring the exception.
-    if ((state_q == WAIT_TMU) && !tmu_hit_i && !req_port_i.data_rvalid && ld_ex.valid && valid_i) begin
-      trans_id_o = lsu_ctrl_i.trans_id;
-      valid_o = 1'b1;
-      ex_o.valid = 1'b1;
+    // report a TMU/MMU exception while waiting for the TMU verdict. The FSM
+    // decides the exact cycle (immediately for an MMU fault, once the
+    // flush+invalidate CBO has been granted for a TMU fault) and only in a
+    // cycle free of a concurrent retire, so this never fights the result port.
+    // Any speculative response held for this load is dropped.
+    if (wait_tmu_ex_report) begin
+      trans_id_o       = lsu_ctrl_i.trans_id;
+      valid_o          = 1'b1;
+      ex_o.valid       = 1'b1;
+      tmu_hold_valid_d = 1'b0;
     end
 
     // raise valid when removing a misspredicted speculative load
@@ -554,15 +641,26 @@ module load_unit
       valid_o = 1'b1;
       ex_o.valid = 1'b0;
     end
+
+    // drop any held speculative response on flush
+    if (flush_i) begin
+      tmu_hold_valid_d = 1'b0;
+    end
   end
 
 
   // latch physical address for the tag cycle (one cycle after applying the index)
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (~rst_ni) begin
-      state_q <= IDLE;
+      state_q             <= IDLE;
+      tmu_hold_valid_q    <= 1'b0;
+      tmu_hold_result_q   <= '0;
+      tmu_hold_trans_id_q <= '0;
     end else begin
-      state_q <= state_d;
+      state_q             <= state_d;
+      tmu_hold_valid_q    <= tmu_hold_valid_d;
+      tmu_hold_result_q   <= tmu_hold_result_d;
+      tmu_hold_trans_id_q <= tmu_hold_trans_id_d;
     end
   end
 
@@ -688,6 +786,11 @@ module load_unit
         end
       end
     endcase
+    // when replaying a held speculative response, drive the latched result
+    // instead of the live cache data
+    if (tmu_replay) begin
+      result_o = tmu_hold_result_q;
+    end
   end
   // end BIG ENDIAN CAPABLE result mux fast
 
