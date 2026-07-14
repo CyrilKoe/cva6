@@ -398,7 +398,7 @@ module cva6
   logic mbe;  // determines the data endian-ness of the processor
   logic rst_uarch_n;
 
-  localparam NumPorts = 4;
+  localparam NumPorts = 5;
 
   // CVXIF
   cvxif_req_t cvxif_req;
@@ -684,8 +684,8 @@ module cva6
   // ----------------
   // DCache <-> *
   // ----------------
-  dcache_req_i_t [2:0] dcache_req_ports_ex_cache;
-  dcache_req_o_t [2:0] dcache_req_ports_cache_ex;
+  dcache_req_i_t [3:0] dcache_req_ports_ex_cache;
+  dcache_req_o_t [3:0] dcache_req_ports_cache_ex;
   dcache_req_i_t dcache_req_ports_id_cache;
   dcache_req_o_t dcache_req_ports_cache_id;
   dcache_req_i_t [1:0] dcache_req_ports_acc_cache;
@@ -1354,7 +1354,7 @@ module cva6
         .resolved_branch_i  (resolved_branch),
         .branch_exceptions_i(flu_exception_ex_id),
         .l1_icache_access_i (icache_dreq_if_cache),
-        .l1_dcache_access_i (dcache_req_ports_ex_cache),
+        .l1_dcache_access_i (dcache_req_ports_ex_cache[2:0]),
         .miss_vld_bits_i    (miss_vld_bits),
         .i_tlb_flush_i      (flush_tlb_ctrl_ex),
         .stall_issue_i      (stall_issue),
@@ -1440,7 +1440,8 @@ module cva6
   end
   assign dcache_req_to_cache[1] = dcache_req_ports_ex_cache[1];
   assign dcache_req_to_cache[2] = dcache_req_ports_acc_cache[0];
-  assign dcache_req_to_cache[3] = dcache_req_ports_ex_cache[2].data_req ? dcache_req_ports_ex_cache [2] :
+  assign dcache_req_to_cache[3] = dcache_req_ports_ex_cache[3];
+  assign dcache_req_to_cache[4] = dcache_req_ports_ex_cache[2].data_req ? dcache_req_ports_ex_cache [2] :
                                                                           dcache_req_ports_acc_cache[1];
 
   // D$ response
@@ -1454,10 +1455,11 @@ module cva6
     assign dcache_req_ports_cache_id = '0;
   end
   assign dcache_req_ports_cache_ex[1]  = dcache_req_from_cache[1];
+  assign dcache_req_ports_cache_ex[3]  = dcache_req_from_cache[3];
   assign dcache_req_ports_cache_acc[0] = dcache_req_from_cache[2];
   always_comb begin : gen_dcache_req_store_data_gnt
-    dcache_req_ports_cache_ex[2]  = dcache_req_from_cache[3];
-    dcache_req_ports_cache_acc[1] = dcache_req_from_cache[3];
+    dcache_req_ports_cache_ex[2]  = dcache_req_from_cache[4];
+    dcache_req_ports_cache_acc[1] = dcache_req_from_cache[4];
 
     // Set gnt signal
     dcache_req_ports_cache_ex[2].data_gnt &= dcache_req_ports_ex_cache[2].data_req;
@@ -1697,7 +1699,7 @@ module cva6
         .commit_ack_i          (commit_ack),
         .acc_stall_st_pending_o(stall_st_pending_ex),
         .acc_no_st_pending_i   (no_st_pending_commit),
-        .dcache_req_ports_i    (dcache_req_ports_ex_cache),
+        .dcache_req_ports_i    (dcache_req_ports_ex_cache[2:0]),
         .acc_mmu_req_o         (acc_mmu_req),
         .acc_mmu_resp_i        (acc_mmu_resp),
         .ctrl_halt_o           (halt_acc_ctrl),

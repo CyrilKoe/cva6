@@ -148,9 +148,9 @@ module load_store_unit
     output logic                                      dtlb_miss_o,
 
     // Data cache request output - CACHES
-    input  dcache_req_o_t [2:0] dcache_req_ports_i,
+    input  dcache_req_o_t [3:0] dcache_req_ports_i,
     // Data cache request input - CACHES
-    output dcache_req_i_t [2:0] dcache_req_ports_o,
+    output dcache_req_i_t [3:0] dcache_req_ports_o,
     // TO_BE_COMPLETED - TO_BE_COMPLETED
     input  logic                dcache_wbuffer_empty_i,
     // TO_BE_COMPLETED - TO_BE_COMPLETED
@@ -410,8 +410,10 @@ module load_store_unit
   // TMU (load address check)
   // ------------------------
   tmu #(
-      .CVA6Cfg    (CVA6Cfg),
-      .exception_t(exception_t)
+      .CVA6Cfg       (CVA6Cfg),
+      .dcache_req_i_t(dcache_req_i_t),
+      .dcache_req_o_t(dcache_req_o_t),
+      .exception_t   (exception_t)
   ) i_tmu (
       .clk_i                   (clk_i),
       .rst_ni                  (rst_ni),
@@ -423,6 +425,8 @@ module load_store_unit
       .tmu_kill_i              (tmu_kill),
       .en_ld_st_translation_i  (en_ld_st_translation_i),
       .en_ld_st_g_translation_i(en_ld_st_g_translation_i),
+      .req_port_i              (dcache_req_ports_i[3]),
+      .req_port_o              (dcache_req_ports_o[3]),
       .tmu_hit_o               (tmu_hit),
       .tmu_exception_o         (tmu_exception)
   );
